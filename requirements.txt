@@ -1,0 +1,1 @@
+Lightweight satellite image analysis for flood detection and alert generation.
