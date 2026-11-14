@@ -1,40 +1,71 @@
-# Data card (draft v0, 29 Oct 2026)
+# Data card — One Look
 
-## Sources
+## Sources and licences
 
-| Source | Content | Use | Licence | Status |
+| Source | What is used | Licence / terms | Attribution |
+|---|---|---|---|
+| **Sen1Floods11 v1.1** (Bonafilia et al., CVPR Workshops 2020), hand-labelled subset, from `gs://sen1floods11` | `S2Hand` (Sentinel-2 chips), `LabelHand` (hand-drawn water masks) | **CC BY 4.0**, as listed on the dataset's Hugging Face mirror. The official GitHub repository does not state a licence; *to confirm with the mentor*. | Cite: Bonafilia, D., Tellman, B., Anderson, T., Issenberg, E. (2020). *Sen1Floods11: a georeferenced dataset to train and test deep learning flood algorithms for Sentinel-1.* CVPR Workshops. |
+| **Copernicus Sentinel-2** imagery (inside Sen1Floods11 and in demo scenes) | 13 spectral bands, Level-1C, 10 m | Free, full and open Copernicus data policy | "Contains modified Copernicus Sentinel data [year]" |
+| **JRC Global Surface Water** (distributed with Sen1Floods11 as `JRCWaterHand`) | Permanent-water mask, subtracted from the flood labels | Free of charge, without restriction of use (Copernicus Programme) | Source: EC JRC/Google; cite Pekel et al. (2016), *Nature* 540 |
+| **Demo scenes** from Copernicus Browser | New Sentinel-2 L1C scenes, never used for training | Copernicus open data policy | As above |
+
+No pre-trained model or weights are used.
+
+## Data types
+
+- `S2Hand`: Sentinel-2 L1C top-of-atmosphere reflectance × 10000 (UInt16), 13 bands
+  (B1 coastal, B2 blue, B3 green, B4 red, B5–B7 red edge, B8 NIR, B8A narrow NIR, B9 water vapour, B10 cirrus,
+  B11 SWIR-1, B12 SWIR-2), 512 × 512 px at 10 m (≈ 5 × 5 km), EPSG:4326.
+- `LabelHand`: −1 no data / invalid, 0 not water, 1 water. Drawn by trained analysts.
+- `JRCWaterHand`: 1 = permanent water.
+
+## From pixels to one label per chip
+
+flood pixels = water in `LabelHand` **and not** permanent water in `JRCWaterHand`; no-data pixels ignored.
+**ALERT (1)** if flood pixels > 1 % of valid pixels, otherwise **NO ALERT (0)**. The 1 % is a project choice: lower
+catches smaller floods but turns tiny wet patches into alerts.
+
+## Composition (446 chips, 11 countries)
+
+| Country | Chips | ALERT | NO ALERT | Subset |
 |---|---|---|---|---|
-| Sen1Floods11 v1.1 (Bonafilia et al., CVPR-W 2020) | 512×512 chips, 10 m; S1 (VV, VH, dB) + S2 (13 bands, TOA ×10000); 446 hand-labelled chips from 11 flood events; JRC permanent-water layer | Train / val / test | To confirm from the official repo / bucket README before submission | Planned |
-| CloudSEN12 | Sentinel-2 chips with cloud / shadow masks | Hard negatives (clouds must not alert) | To confirm (dataset page) | Planned |
-| Copernicus Sentinel data (via Copernicus Browser) | New S1/S2 scenes | Demo on unseen images | Free and open Copernicus data policy; attribution "Contains modified Copernicus Sentinel data [year]" | Planned |
-| Copernicus EMS | Activation list for recent floods | Choosing demo scenes (not used for training) | Check per-product terms | Planned |
-| Pre-trained weights (TorchGeo) | ImageNet or Sentinel-2 self-supervised weights | Backbone initialisation | Per-weight licence, to record | Planned |
+| Bolivia | 15 | 11 | 4 | test |
+| Ghana | 53 | 19 | 34 | test |
+| Spain | 30 | 21 | 9 | val |
+| Sri-Lanka | 42 | 25 | 17 | val |
+| India | 68 | 58 | 10 | train |
+| Mekong | 30 | 24 | 6 | train |
+| Nigeria | 18 | 12 | 6 | train |
+| Pakistan | 28 | 14 | 14 | train |
+| Paraguay | 67 | 38 | 29 | train |
+| Somalia | 26 | 15 | 11 | train |
+| USA | 69 | 36 | 33 | train |
+| **Total** | **446** | **273** | **173** | |
 
-## Label meaning (Sen1Floods11)
-`-1` = no data / invalid · `0` = not water · `1` = water.
-Permanent water is removed using the JRC layer **before** computing the flood fraction, so that rivers and lakes do not cause alerts.
+| Subset | Chips | ALERT | NO ALERT |
+|---|---|---|---|
+| train | 306 | 197 | 109 |
+| val | 72 | 46 | 26 |
+| test | 68 | 30 | 38 |
 
-## Split protocol
-- Unit of splitting = **country / flood event**, never single chips.
-- **Test:** Bolivia (fully held out, geographic generalisation) + 1–2 other events.
-- **Val:** 1–2 events, used to tune thresholds only.
-- **Train:** remaining events.
-- The split is saved to `data/splits.json` and committed, so every experiment uses the same split.
+*(From the labelling run of 2 Nov 2026. Check against the output of `src/split.py` in notebook 03.)*
 
-## Leakage risks and mitigations
+## Split protocol and leakage
+
 | Risk | Mitigation |
 |---|---|
-| Neighbouring chips from the same event are near-duplicates | Split by event / country |
-| Same location seen at different dates | Check chip footprints across splits |
-| Tuning thresholds on test | Thresholds tuned on val only; test touched once per final model |
-| Pretrained weights trained on overlapping scenes | Record weight provenance |
-| Demo images overlapping training areas | Choose demo scenes from events not in Sen1Floods11 |
+| Neighbouring chips of one flood are near-duplicates | Split by **country**: a country is in exactly one subset (checked by an assertion and a unit test) |
+| Choosing thresholds or the model on test | Thresholds and the final model are chosen on **val** only; test is measured once |
+| Test too small to measure false alarms | Ghana added to test: 38 NO ALERT chips instead of 4 |
+| Demo images overlapping training areas | Demo scenes come from floods/places not in Sen1Floods11 |
+| Same place seen at several dates | Not checked chip by chip. Splitting by country removes it across subsets |
 
-## Known biases and limitations (to complete)
-- Only 11 events, so the climate and land cover coverage is limited.
-- Optical (S2) bands fail under cloud; S1 radar handles this but has speckle and is confused by smooth surfaces (tarmac, sand).
-- Hand labels contain annotator errors at water edges.
-- Class balance (alert vs no alert) depends on the threshold T; this will be reported once the data is downloaded.
+## Biases and limitations
 
-## Composition
-To be filled after download: number of chips per country, per split, per class.
+- **Geography:** 11 events, mostly tropical and sub-tropical river floods. Few arid, snowy or urban scenes.
+- **"Normal" is narrow:** every NO ALERT chip comes from a flood-affected region at flood time. A model can still meet
+  scenes it has never seen (desert, snow, cities), hence the UNKNOWN decision.
+- **Class balance:** 61 % ALERT overall, but India and Mekong are mostly ALERT, while Ghana and USA are more balanced.
+- **Optical sensor:** clouds and cloud shadows hide or imitate water. Floods often happen under cloud.
+- **Labels:** human masks contain errors at water edges. Chips near the 1 % line are the most ambiguous (see the failure analysis).
+- **Size:** 68 test chips, so one extra error changes recall by about 3 points and the false-alarm rate by about 3 points.
