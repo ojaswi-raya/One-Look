@@ -28,7 +28,7 @@ Permanent water comes from the JRC Global Surface Water map and is subtracted fi
 
 Sen1Floods11 v1.1, hand-labelled subset: **446 Sentinel-2 chips** (512 × 512 px at 10 m, about 5 × 5 km) from
 **11 flood events**, with hand-drawn water masks and the JRC permanent-water mask. With the 1 % rule:
-**273 ALERT / 173 NO ALERT**. Details, licences, composition and leakage risks: [`docs/data_card.md`](docs/data_card.md).
+**273 ALERT / 168 NO ALERT**. Details, licences, composition and leakage risks: [`docs/data_card.md`](docs/data_card.md).
 
 **Geographic split. All chips of a country stay in one subset**, because neighbouring chips of the same flood are
 near-duplicates and a random split would leak:
@@ -37,7 +37,7 @@ near-duplicates and a random split would leak:
 |---|---|---|---|---|
 | train | India, Mekong, Nigeria, Pakistan, Paraguay, Somalia, USA | 197 | 109 | fitting models |
 | val | Spain, Sri-Lanka | 46 | 26 | choosing thresholds and the final model |
-| test | Bolivia, Ghana | 30 | 38 | measured once, never used for any choice |
+| test | Bolivia, Ghana | 30 | 33 | measured once, never used for any choice |
 
 Bolivia is held out as in the dataset paper. Ghana is added because Bolivia alone has only 4 NO ALERT chips,
 too few to measure the false-alarm rate.
@@ -67,9 +67,70 @@ dead bands).
 
 ## 4. Results
 
-Produced by `notebooks/03_run_everything.ipynb` on the real dataset; full tables in [`results/`](results/).
+Run of 16 Nov 2026 on the real dataset (`notebooks/03_run_everything.ipynb`). 441 chips were usable:
+5 Ghana chips have no valid pixels and 1 Paraguay chip almost none. Test = Bolivia + Ghana: 63 chips,
+30 ALERT / 33 NO ALERT, never used for training or for any choice.
 
-> **To fill in:** paste `results/results.md` here after running notebook 03.
+### Comparison of approaches (test set)
+
+| Approach | Precision | Recall | F1 | False-alarm rate | ROC-AUC | Size (KB) | ms / chip (CPU) |
+|---|---|---|---|---|---|---|---|
+| B1 MNDWI rule (no learning) | 1.00 | 0.23 | 0.38 | 0.00 | 0.78 | 0 | 78.2 |
+| M1 Logistic regression | 0.00 | 0.00 | 0.00 | 0.00 | 0.92 | 3 | 78.8 |
+| **M2 Random forest small (final)** | **1.00** | **0.40** | **0.57** | **0.00** | **0.94** | **192** | **82.6** |
+| M3 Random forest large | 1.00 | 0.40 | 0.57 | 0.00 | 0.94 | 1358 | 107.1 |
+
+Thresholds were chosen on validation (Spain, Sri-Lanka) to keep false alarms at or below 5 %. The final model was chosen on validation.
+
+**What this shows**
+- **No false alarms:** every alert on the unseen countries was a real flood (precision 1.00, false-alarm rate 0.00).
+  The brief's main reliability goal, not alerting on everything, is met.
+- **Too cautious:** only 12 of 30 floods are caught (recall 0.40). The ROC-AUC of 0.94 shows the model ranks flooded
+  chips above normal ones well, so the weak point is the alert threshold, not the model.
+- **Learning helps:** the random forest finds almost twice as many floods as the physical MNDWI rule
+  (recall 0.40 vs 0.23) with the same zero false alarms.
+- **Small is enough:** the 50-tree forest equals the 300-tree forest while being 7× smaller and faster, so it was kept.
+  Most of the ~80 ms per chip is feature extraction, not the model.
+- **Logistic regression fails at the threshold step:** it ranks chips well (ROC-AUC 0.92), but on validation no
+  threshold kept false alarms at or below 5 % while still alerting, so it never alerts on test.
+
+### UNKNOWN detection
+
+| Scenes | n | Flagged UNKNOWN |
+|---|---|---|
+| Real test chips | 63 | 0 % |
+| Synthetic thick cloud / snow / desert sand / sensor noise / dead bands | 63 each | 100 % (AUROC 1.00) |
+
+Real unseen chips are never wrongly flagged, and all synthetic odd scenes are. The synthetic scenes are much more
+different from the training data than most real odd scenes would be, so this is an optimistic test. Real cloud,
+snow and desert imagery is the next step.
+
+### Three-way decisions on the test set
+
+| True \ Decision | ALERT | NO ALERT | UNKNOWN |
+|---|---|---|---|
+| ALERT (30) | 12 | 18 | 0 |
+| NO ALERT (33) | 0 | 33 | 0 |
+
+### Failure analysis
+
+All 18 errors are **missed floods**; there are no false alarms (full list: `results/failures.csv`, pictures:
+`results/failures.png`). Three patterns:
+1. **Threshold too strict for new countries.** Several missed chips still got a high flood probability, for example
+   Ghana_247288: p = 0.86, with 61.5 % of the chip flooded. The threshold tuned on Spain and Sri Lanka does not
+   transfer perfectly to Bolivia and Ghana.
+2. **Clouds.** Some flooded chips are partly covered by cloud. An optical sensor cannot see water under cloud, which
+   pulls the features towards "normal".
+3. **No-data areas.** Some chips are partly black (outside the satellite swath), for example the Bolivia demo chip.
+   The features describe less of the scene and the decision becomes uncertain.
+
+**What I would change next:** choose the threshold with more validation countries or with cross-validation by country;
+add Sentinel-1 radar, which sees through cloud; and lower the threshold if a few false alarms are acceptable in exchange
+for catching more floods.
+
+### Demo
+`src/predict.py` on Bolivia_103757 (test country, never seen): one pass, 37 ms, p(flood) = 0.80, decision NO ALERT,
+just below the threshold. It is one of the missed floods described above. Picture: `results/demo_test_chip.png`.
 
 ## 5. Reproduce
 
